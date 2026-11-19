@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { RowDataPacket, OkPacket } from 'mysql2';
 import * as bcrypt from 'bcryptjs';
@@ -11,11 +16,18 @@ export class UsersService {
 
   async createUser(username: string, password: string, role = 'user') {
     const hashed = await bcrypt.hash(password, 10);
-    const [result] = await this.pool().execute<OkPacket>(
-      'INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-      [username, hashed, role],
-    );
-    return { id: result.insertId, username, role };
+    try {
+      const [result] = await this.pool().execute<OkPacket>(
+        'INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
+        [username, hashed, role],
+      );
+      return { id: result.insertId, username, role };
+    } catch (error: any) {
+      if (error.code === 'ER_DUP_ENTRY') {
+        throw new ConflictException('Username is already taken.');
+      }
+      throw new InternalServerErrorException('Failed to create user.');
+    }
   }
 
   async findByUsername(username: string) {
@@ -60,8 +72,16 @@ export class UsersService {
     if (fields.length === 0) return await this.findById(id);
     values.push(id);
     const sql = `UPDATE users SET ${fields.join(', ')} WHERE id = ?`;
-    await this.pool().execute(sql, values);
-    return this.findById(id);
+
+    try {
+      await this.pool().execute(sql, values);
+      return this.findById(id);
+    } catch (error: any) {
+      if (error.code === 'ER_DUP_ENTRY') {
+        throw new ConflictException('Username is already taken.');
+      }
+      throw new InternalServerErrorException('Failed to update user.');
+    }
   }
 
   async deleteUser(id: number) {
